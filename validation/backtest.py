@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import spearmanr
 import logging
+from mcts.formula_generator import safe_divide
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +15,23 @@ def eval_formula(formula, X):
     try:
         if 'delay' in formula:
             # 处理延迟函数
-            parts = formula.split('(')[1].split(')')[0].split(',')
-            column, delay = parts[0].strip(), int(parts[1].strip())
-            return X[column].shift(delay)
-        return pd.eval(formula, local_dict=X)
+            try:
+                parts = formula.split('(')[1].split(')')[0].split(',')
+                if len(parts) != 2:
+                    raise ValueError(f"Invalid delay formula format: {formula}")
+                column, delay_str = parts[0].strip(), parts[1].strip()
+                delay = int(delay_str)
+                if column not in X.columns:
+                    raise ValueError(f"Column '{column}' not found in dataset")
+                return X[column].shift(delay)
+            except (ValueError, IndexError) as e:
+                logger.error(f"Invalid delay format in formula '{formula}': {e}")
+                return pd.Series(np.nan, index=X.index)
+        
+        # 创建安全的评估环境
+        safe_dict = X.copy()
+        safe_dict['safe_divide'] = safe_divide
+        return pd.eval(formula, local_dict=safe_dict)
     except Exception as e:
         logger.error(f"Error evaluating formula '{formula}': {e}")
         return pd.Series(np.nan, index=X.index)

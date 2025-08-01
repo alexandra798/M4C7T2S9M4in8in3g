@@ -67,7 +67,22 @@ class AlphaPool:
             else:
                 # 重新计算IC
                 feature = evaluate_formula_func(formula, X_train)
-                ic, _ = spearmanr(feature.values, y_train.values)
+                # 确保数据对齐后再使用.values
+                common_index = feature.index.intersection(y_train.index)
+                if len(common_index) > 0:
+                    feature_aligned = feature.loc[common_index]
+                    y_train_aligned = y_train.loc[common_index]
+                    # 移除NaN值
+                    valid_mask = ~(feature_aligned.isna() | y_train_aligned.isna())
+                    if valid_mask.sum() > 1:
+                        ic, _ = spearmanr(
+                            feature_aligned[valid_mask].values, 
+                            y_train_aligned[valid_mask].values
+                        )
+                    else:
+                        ic = 0.0
+                else:
+                    ic = 0.0
                 self.cache_ic(formula, ic)
 
             # 计算与其他alpha的相互IC
@@ -80,10 +95,20 @@ class AlphaPool:
                     else:
                         other_feature = evaluate_formula_func(other_alpha['formula'], X_train)
                         common_index = feature.index.intersection(other_feature.index)
-                        mutic, _ = spearmanr(
-                            feature.loc[common_index].values,
-                            other_feature.loc[common_index].values
-                        )
+                        if len(common_index) > 0:
+                            feature_common = feature.loc[common_index]
+                            other_feature_common = other_feature.loc[common_index]
+                            # 移除NaN值
+                            valid_mask = ~(feature_common.isna() | other_feature_common.isna())
+                            if valid_mask.sum() > 1:
+                                mutic, _ = spearmanr(
+                                    feature_common[valid_mask].values,
+                                    other_feature_common[valid_mask].values
+                                )
+                            else:
+                                mutic = 0.0
+                        else:
+                            mutic = 0.0
                         self.cache_mutic(formula, other_alpha['formula'], mutic)
                     mutic_sum += mutic
 

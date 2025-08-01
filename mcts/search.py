@@ -13,8 +13,12 @@ def ucb1(node, exploration_param=1.41):
     if node.visits == 0:
         return np.inf
     parent_visits = node.parent.visits if node.parent is not None else 1
-    exploitation = node.value / node.visits
-    exploration = exploration_param * np.sqrt(np.log(parent_visits) / node.visits)
+    # 防御性编程：确保除法安全
+    visits = max(node.visits, 1)
+    parent_visits = max(parent_visits, 1)
+    
+    exploitation = node.value / visits
+    exploration = exploration_param * np.sqrt(np.log(parent_visits) / visits)
     return exploitation + exploration
 
 

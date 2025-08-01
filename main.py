@@ -77,7 +77,13 @@ def main(args):
 
         # 获取所有日期并排序
         dates = X.index.get_level_values('date').unique().sort_values()
-        split_date = dates[int(len(dates) * 0.8)]  # 80%作为训练集
+        dates_len = len(dates)
+        if dates_len == 0:
+            raise ValueError("No dates available for splitting dataset")
+        split_index = int(dates_len * 0.8)
+        if split_index >= dates_len:
+            split_index = dates_len - 1
+        split_date = dates[split_index]  # 80%作为训练集
 
         train_mask = X.index.get_level_values('date') <= split_date
         test_mask = X.index.get_level_values('date') > split_date

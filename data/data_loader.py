@@ -37,8 +37,8 @@ def load_csi300_tickers(csi300_file_path: str) -> List[str]:
     return tickers
 
 
-def load_single_ticker_data(file_path: str, ticker: str, target_column: str,
-                            future_days: int = 20) -> Tuple[pd.DataFrame, pd.Series]:
+def load_single_ticker_data(file_path: str, ticker: str, target_column: str, 
+                           future_days: int = 20) -> Tuple[pd.DataFrame, pd.Series]:
     """
     加载单个股票的CSV数据
 
@@ -55,8 +55,11 @@ def load_single_ticker_data(file_path: str, ticker: str, target_column: str,
     try:
         df = pd.read_csv(file_path)
 
-        # 添加ticker列
-        df['ticker'] = ticker
+        # 如果CSV中已有code列，使用它；否则添加ticker列
+        if 'code' in df.columns:
+            df['ticker'] = df['code']
+        else:
+            df['ticker'] = ticker
 
         # 处理日期列
         if 'date' in df.columns:
@@ -73,27 +76,30 @@ def load_single_ticker_data(file_path: str, ticker: str, target_column: str,
 
         # 确保目标列存在
         if target_column not in df.columns:
-            logger.warning(f"Target column '{target_column}' not found in {file_path}")
-            return None, None
+            error_msg = f"Target column '{target_column}' not found in {file_path}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # 移除最后future_days行（因为没有未来数据）
         if target_column == 'label_shifted':
             df = df[:-future_days]
 
         # 分离特征和目标
-        X = df.drop(columns=[target_column])
+        # 删除不需要的列
+        columns_to_drop = [target_column, 'ts_code_x', 'ts_code_y', 'preclose', 'code']
+        columns_to_drop = [col for col in columns_to_drop if col in df.columns]
+        X = df.drop(columns=columns_to_drop)
         y = df[target_column]
 
         return X, y
 
     except Exception as e:
         logger.error(f"Error loading {file_path}: {e}")
-        return None, None
+        raise RuntimeError(f"Failed to load data from {file_path}: {e}") from e
 
 
 def load_batch_datasets(data_directory: str, csi300_file_path: str, target_column: str,
-                        file_pattern: str = "{ticker}.csv", future_days: int = 20) -> Tuple[
-    pd.DataFrame, pd.Series, List[str]]:
+                        file_pattern: str = "{ticker}.csv", future_days: int = 20) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     """
     批量加载CSI300股票数据
 
@@ -131,14 +137,17 @@ def load_batch_datasets(data_directory: str, csi300_file_path: str, target_colum
             continue
 
         # 加载数据
-        X_ticker, y_ticker = load_single_ticker_data(file_path, ticker, target_column, future_days)
-
-        if X_ticker is not None and y_ticker is not None:
+        try:
+            X_ticker, y_ticker = load_single_ticker_data(file_path, ticker, target_column, future_days)
             all_X_data.append(X_ticker)
             all_y_data.append(y_ticker)
             successful_loads += 1
             logger.debug(f"Successfully loaded {ticker}: {X_ticker.shape[0]} records")
-        else:
+        except (ValueError, RuntimeError) as e:
+            logger.warning(f"Failed to load {ticker}: {e}")
+            failed_loads += 1
+        except Exception as e:
+            logger.error(f"Unexpected error loading {ticker}: {e}")
             failed_loads += 1
 
     logger.info(f"Batch loading completed: {successful_loads} successful, {failed_loads} failed")
@@ -153,8 +162,27 @@ def load_batch_datasets(data_directory: str, csi300_file_path: str, target_colum
 
     # 设置多级索引（ticker, date）
     if 'ticker' in X_combined.columns and 'date' in X_combined.columns:
-        X_combined.set_index(['ticker', 'date'], inplace=True)
-        y_combined.index = X_combined.index
+        # 验证和标准化数据类型
+        try:
+            # 确保ticker列是字符串类型
+            X_combined['ticker'] = X_combined['ticker'].astype(str)
+            # 确保date列是datetime类型
+            X_combined['date'] = pd.to_datetime(X_combined['date'], errors='coerce')
+            
+            # 检查是否有无效的日期转换
+            invalid_dates = X_combined['date'].isna()
+            if invalid_dates.any():
+                logger.warning(f"Found {invalid_dates.sum()} invalid date entries, removing them")
+                X_combined = X_combined[~invalid_dates]
+                y_combined = y_combined.iloc[X_combined.index]
+            
+            # 设置多级索引
+            X_combined.set_index(['ticker', 'date'], inplace=True)
+            y_combined.index = X_combined.index
+            
+        except Exception as e:
+            logger.error(f"Error setting multi-level index: {e}")
+            raise ValueError(f"Failed to create multi-level index: {e}") from e
 
     # 获取特征列表（排除ticker列）
     all_features = [col for col in X_combined.columns if col != 'ticker']
@@ -179,10 +207,17 @@ def load_user_dataset(file_path, target_column, future_days=20):
         user_dataset.dropna(subset=['date'], inplace=True)
         # 按日期排序
         user_dataset = user_dataset.sort_values('date')
-
+        
         # 如果存在ticker和date，设置多级索引
         if 'ticker' in user_dataset.columns:
-            user_dataset.set_index(['ticker', 'date'], inplace=True)
+            try:
+                # 确保ticker列是字符串类型
+                user_dataset['ticker'] = user_dataset['ticker'].astype(str)
+                # 确保date列是datetime类型（已经转换过）
+                user_dataset.set_index(['ticker', 'date'], inplace=True)
+            except Exception as e:
+                logger.error(f"Error setting multi-level index in single dataset: {e}")
+                raise ValueError(f"Failed to create multi-level index: {e}") from e
 
     # 如果目标列是 label_shifted，自动生成
     if target_column == 'label_shifted' and target_column not in user_dataset.columns:
@@ -197,7 +232,10 @@ def load_user_dataset(file_path, target_column, future_days=20):
         raise ValueError(f"Target column '{target_column}' not found in dataset.")
 
     # 分离特征和目标
-    X = user_dataset.drop(columns=[target_column])
+    # 删除不需要的列
+    columns_to_drop = [target_column, 'ts_code_x', 'ts_code_y', 'preclose', 'code']
+    columns_to_drop = [col for col in columns_to_drop if col in user_dataset.columns]
+    X = user_dataset.drop(columns=columns_to_drop)
     y = user_dataset[target_column]
 
     # 获取特征名称列表
