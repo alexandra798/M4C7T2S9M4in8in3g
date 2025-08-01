@@ -46,12 +46,17 @@ def main(args):
             data_directory=args.data_directory,
             csi300_file_path=args.csi300_file,
             target_column=args.target_column,
-            file_pattern=args.file_pattern
+            file_pattern=args.file_pattern,
+            future_days=args.future_days  # 新增参数
         )
     else:
         # 单文件模式：保持原有逻辑
         logger.info("Running in single file mode...")
-        X, y, all_features = load_user_dataset(args.data_path, args.target_column)
+        X, y, all_features = load_user_dataset(
+            args.data_path,
+            args.target_column,
+            future_days=args.future_days  # 新增参数
+        )
 
     # 显示数据统计信息
     stats = get_data_statistics(X, y)
@@ -205,6 +210,14 @@ if __name__ == "__main__":
         type=str,
         default="label_shifted",
         help="Name of the target column"
+    )
+
+    # 新增参数：未来天数
+    parser.add_argument(
+        "--future_days",
+        type=int,
+        default=20,
+        help="Number of days to calculate future returns (default: 20)"
     )
 
     # 批量处理模式参数

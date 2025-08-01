@@ -37,7 +37,8 @@ def load_csi300_tickers(csi300_file_path: str) -> List[str]:
     return tickers
 
 
-def load_single_ticker_data(file_path: str, ticker: str, target_column: str) -> Tuple[pd.DataFrame, pd.Series]:
+def load_single_ticker_data(file_path: str, ticker: str, target_column: str,
+                            future_days: int = 20) -> Tuple[pd.DataFrame, pd.Series]:
     """
     加载单个股票的CSV数据
 
@@ -45,6 +46,7 @@ def load_single_ticker_data(file_path: str, ticker: str, target_column: str) -> 
     - file_path: CSV文件路径
     - ticker: 股票代码
     - target_column: 目标列名称
+    - future_days: 计算未来收益的天数
 
     Returns:
     - X: 特征数据
@@ -60,11 +62,23 @@ def load_single_ticker_data(file_path: str, ticker: str, target_column: str) -> 
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'], errors='coerce')
             df.dropna(subset=['date'], inplace=True)
+            # 按日期排序
+            df = df.sort_values('date')
+
+        # 如果目标列是 label_shifted，自动生成
+        if target_column == 'label_shifted' and target_column not in df.columns:
+            # 计算未来N天的收益率
+            df[target_column] = df['close'].pct_change(future_days).shift(-future_days)
+            logger.debug(f"Generated {target_column} for {ticker} with {future_days} days forward return")
 
         # 确保目标列存在
         if target_column not in df.columns:
             logger.warning(f"Target column '{target_column}' not found in {file_path}")
             return None, None
+
+        # 移除最后future_days行（因为没有未来数据）
+        if target_column == 'label_shifted':
+            df = df[:-future_days]
 
         # 分离特征和目标
         X = df.drop(columns=[target_column])
@@ -78,7 +92,8 @@ def load_single_ticker_data(file_path: str, ticker: str, target_column: str) -> 
 
 
 def load_batch_datasets(data_directory: str, csi300_file_path: str, target_column: str,
-                        file_pattern: str = "{ticker}.csv") -> Tuple[pd.DataFrame, pd.Series, List[str]]:
+                        file_pattern: str = "{ticker}.csv", future_days: int = 20) -> Tuple[
+    pd.DataFrame, pd.Series, List[str]]:
     """
     批量加载CSI300股票数据
 
@@ -87,6 +102,7 @@ def load_batch_datasets(data_directory: str, csi300_file_path: str, target_colum
     - csi300_file_path: csi300.txt文件路径
     - target_column: 目标列名称
     - file_pattern: 文件名模式，{ticker}会被替换为实际股票代码
+    - future_days: 计算未来收益的天数
 
     Returns:
     - X: 合并后的特征数据（包含ticker和date的多级索引）
@@ -115,7 +131,7 @@ def load_batch_datasets(data_directory: str, csi300_file_path: str, target_colum
             continue
 
         # 加载数据
-        X_ticker, y_ticker = load_single_ticker_data(file_path, ticker, target_column)
+        X_ticker, y_ticker = load_single_ticker_data(file_path, ticker, target_column, future_days)
 
         if X_ticker is not None and y_ticker is not None:
             all_X_data.append(X_ticker)
@@ -150,7 +166,7 @@ def load_batch_datasets(data_directory: str, csi300_file_path: str, target_colum
     return X_combined, y_combined, all_features
 
 
-def load_user_dataset(file_path, target_column):
+def load_user_dataset(file_path, target_column, future_days=20):
     """
     加载单个用户数据集（保持向后兼容）
     """
@@ -161,9 +177,20 @@ def load_user_dataset(file_path, target_column):
     if 'date' in user_dataset.columns:
         user_dataset['date'] = pd.to_datetime(user_dataset['date'], errors='coerce')
         user_dataset.dropna(subset=['date'], inplace=True)
+        # 按日期排序
+        user_dataset = user_dataset.sort_values('date')
+
         # 如果存在ticker和date，设置多级索引
         if 'ticker' in user_dataset.columns:
             user_dataset.set_index(['ticker', 'date'], inplace=True)
+
+    # 如果目标列是 label_shifted，自动生成
+    if target_column == 'label_shifted' and target_column not in user_dataset.columns:
+        # 计算未来N天的收益率
+        user_dataset[target_column] = user_dataset['close'].pct_change(future_days).shift(-future_days)
+        logger.info(f"Generated {target_column} with {future_days} days forward return")
+        # 移除最后future_days行
+        user_dataset = user_dataset[:-future_days]
 
     # 确保目标列存在
     if target_column not in user_dataset.columns:
