@@ -1,6 +1,6 @@
-# RiskMiner Algorithm
+# M4C7T2S9M4in8in3g
 
-使用蒙特卡洛树搜索(MCTS)发现金融Alpha因子的高级算法实现。
+使用蒙特卡洛树搜索(MCTS)发现金融Alpha因子的算法实现。
 
 ## 项目结构
 
