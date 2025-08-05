@@ -3,11 +3,17 @@ import pandas as pd
 import numpy as np
 import logging
 import re
-from mcts.formula_generator import safe_divide
+from mcts.formula_generator import (
+    safe_divide, ref, csrank,
+    # Group 2 operators
+    sign, abs_op, log, greater, less,
+    rank, std, ts_max, ts_min, skew, kurt, mean, med, ts_sum,
+    cov, corr, decay_linear, wma, ema
+)
 
 logger = logging.getLogger(__name__)
 
-
+# 这个到时候也需要改，把log等算子加入白名单
 def sanitize_formula(formula):
     """
     清理和验证公式，防止不安全的操作
@@ -63,8 +69,12 @@ def evaluate_formula(formula, data):
             return pd.Series(np.nan, index=data.index)
         
         # 创建安全的评估环境
-        safe_dict = data.copy()
-        safe_dict['safe_divide'] = safe_divide
+        # 重要修复：分离DataFrame列和函数，避免将函数混入DataFrame
+        safe_dict = {}
+        
+        # 将DataFrame的每一列转换为Series并添加到字典中
+        for col in data.columns:
+            safe_dict[col] = data[col]
         
         # 限制可用的函数和变量
         allowed_functions = {
@@ -74,7 +84,35 @@ def evaluate_formula(formula, data):
             'sum': sum,
             'len': len,
             'safe_divide': safe_divide,
+            # Group 1 operators
+            'ref': ref,
+            'csrank': csrank,
+            # Group 2 operators - unary
+            'sign': sign,
+            'abs_op': abs_op,
+            'log': log,
+            # Group 2 operators - comparison
+            'greater': greater,
+            'less': less,
+            # Group 2 operators - time series
+            'rank': rank,
+            'std': std,
+            'ts_max': ts_max,
+            'ts_min': ts_min,
+            'skew': skew,
+            'kurt': kurt,
+            'mean': mean,
+            'med': med,
+            'ts_sum': ts_sum,
+            # Group 2 operators - correlation
+            'cov': cov,
+            'corr': corr,
+            # Group 2 operators - moving averages
+            'decay_linear': decay_linear,
+            'wma': wma,
+            'ema': ema,
             'np': np,  # 允许numpy函数
+            'pd': pd,  # 允许pandas函数
         }
         
         # 验证公式中的所有变量都存在
@@ -84,27 +122,58 @@ def evaluate_formula(formula, data):
                 logger.warning(f"Unknown variable '{var}' in formula: {formula}")
                 return pd.Series(np.nan, index=data.index)
         
-        # 安全评估
+        # 将允许的函数添加到安全字典中
         safe_dict.update(allowed_functions)
-        try:
-            result = pd.eval(sanitized_formula, local_dict=safe_dict)
-        except ValueError as e:
-            if "If using all scalar values, you must pass an index" in str(e):
-                # 直接计算标量操作，然后转换为Series
-                result = eval(sanitized_formula, {"__builtins__": {}}, safe_dict)
-                result = pd.Series([result], index=[data.index[0]] if len(data.index) == 1 else data.index[:1])
-            else:
-                raise e
         
-        # 处理其他类型的结果
-        if not isinstance(result, (pd.Series, pd.DataFrame)):
-            result = pd.Series([result], index=[data.index[0]] if len(data.index) == 1 else data.index[:1])
-        elif isinstance(result, pd.Series):
+        # 安全评估
+        try:
+            # 使用python引擎以获得更好的兼容性
+            result = pd.eval(sanitized_formula, local_dict=safe_dict, engine='python')
+            
+            # 处理结果类型
+            if isinstance(result, (int, float, np.number)):
+                # 如果结果是标量，创建一个Series
+                result = pd.Series(result, index=data.index)
+            elif isinstance(result, np.ndarray):
+                # 如果结果是numpy数组，转换为Series
+                result = pd.Series(result, index=data.index)
+            elif not isinstance(result, pd.Series):
+                # 其他情况，尝试转换为Series
+                try:
+                    result = pd.Series(result, index=data.index)
+                except:
+                    logger.error(f"Cannot convert result to Series for formula: {formula}")
+                    return pd.Series(np.nan, index=data.index)
+            
             # 替换无限值为NaN
             result = result.replace([np.inf, -np.inf], np.nan)
-        
-        return result
-        
+            
+            return result
+            
+        except Exception as e:
+            # 如果pd.eval失败，尝试使用标准eval作为后备方案
+            if "scalar" in str(e).lower():
+                try:
+                    # 创建一个更受限的环境用于标准eval
+                    eval_dict = {"__builtins__": {}}
+                    eval_dict.update(safe_dict)
+                    
+                    # 执行评估
+                    result = eval(sanitized_formula, eval_dict)
+                    
+                    # 确保返回Series
+                    if isinstance(result, pd.Series):
+                        return result.replace([np.inf, -np.inf], np.nan)
+                    else:
+                        # 如果结果是标量或数组，转换为Series
+                        return pd.Series(result, index=data.index).replace([np.inf, -np.inf], np.nan)
+                        
+                except Exception as eval_error:
+                    logger.error(f"Both pd.eval and eval failed for formula '{formula}': {eval_error}")
+                    return pd.Series(np.nan, index=data.index)
+            else:
+                raise e
+                
     except Exception as e:
         logger.error(f"Error evaluating formula '{formula}': {e}")
         return pd.Series(np.nan, index=data.index)

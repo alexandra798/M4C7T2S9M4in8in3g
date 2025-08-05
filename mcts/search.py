@@ -1,9 +1,13 @@
 """MCTS搜索算法实现"""
 import numpy as np
 import logging
-from scipy.stats import spearmanr
+import warnings
+from scipy.stats import spearmanr, ConstantInputWarning
 from .node import MCTSNode
 from .formula_generator import generate_formula
+
+# 忽略常量输入警告
+warnings.filterwarnings('ignore', category=ConstantInputWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +95,20 @@ def simulate_alpha_performance_quantile(node, X_train, y_train, ticker=None,
         ]
     high_quantile_y = y_train_aligned.loc[high_quantile_alpha.index]
 
+    # 检查是否有足够的数据点和变异性
+    if len(high_quantile_alpha) < 2:
+        return 0
+    
+    # 检查是否为常数数组
+    if high_quantile_alpha.nunique() <= 1 or high_quantile_y.nunique() <= 1:
+        return 0
+    
     # 计算高分位数数据的IC
-    ic, _ = spearmanr(high_quantile_alpha, high_quantile_y)
-    if np.isnan(ic):
+    try:
+        ic, _ = spearmanr(high_quantile_alpha, high_quantile_y)
+        if np.isnan(ic):
+            ic = 0
+    except:
         ic = 0
 
     return ic
