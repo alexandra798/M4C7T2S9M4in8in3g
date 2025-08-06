@@ -13,6 +13,7 @@ from data.data_loader import (
 )
 from mcts.node import MCTSNode
 from mcts.search import run_mcts_with_quantile
+from mcts.search import run_mcts_with_risk_seeking
 from alpha.pool import AlphaPool
 from alpha.evaluation import evaluate_formula
 from validation.cross_validation import cross_validate_formulas
@@ -57,15 +58,27 @@ def main(args):
     )
 
     # 运行带分位数优化的MCTS
-    best_formulas_quantile = run_mcts_with_quantile(
-        root_node,
-        X_train,
-        y_train,
-        all_features,
-        MCTS_CONFIG['num_iterations'],
-        evaluate_formula,
-        MCTS_CONFIG['quantile_threshold']
-    )
+    if args.use_risk_seeking:
+        # 使用风险寻求MCTS（论文版本）
+        best_formulas_quantile = run_mcts_with_risk_seeking(
+            root_node,
+            X_train,
+            y_train,
+            all_features,
+            MCTS_CONFIG['num_iterations'],
+            evaluate_formula,
+            MCTS_CONFIG['quantile_threshold']
+        )
+    else:
+        best_formulas_quantile = run_mcts_with_quantile(
+            root_node,
+            X_train,
+            y_train,
+            all_features,
+            MCTS_CONFIG['num_iterations'],
+            evaluate_formula,
+            MCTS_CONFIG['quantile_threshold']
+        )
 
     # 将最佳公式添加到alpha池
     for formula, score in best_formulas_quantile:
@@ -151,6 +164,11 @@ if __name__ == "__main__":
         type=str,
         default="target",
         help="Name of the target column"
+    )
+    parser.add_argument(
+        "--use_risk_seeking",
+        action="store_true",
+        help="Use risk-seeking MCTS with policy network (paper version)"
     )
     parser.add_argument(
         "--transform_data",
