@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import spearmanr
 import logging
-from mcts.formula_generator import safe_divide
+
 
 logger = logging.getLogger(__name__)
 

@@ -8,13 +8,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def load_user_dataset(file_path, target_column):
+def load_user_dataset(file_path='price_volume_data_20100101_20250731.csv', target_column='target'):
     """
     加载用户数据集，设置目标列，并准备特征。
 
     Parameters:
-    - file_path: 数据集文件路径 (CSV或.pt文件)
-    - target_column: 数据集中的目标列名称
+    - file_path: 数据集文件路径 (CSV或.pt文件), 默认为 price_volume_data_20100101_20250731.csv
+    - target_column: 数据集中的目标列名称, 默认为 'target'
 
     Returns:
     - X (特征), y (目标), all_features (特征名称列表)

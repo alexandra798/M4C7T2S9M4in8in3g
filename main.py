@@ -1,7 +1,8 @@
-"""主程序入口 - 支持批量CSV文件处理"""
+"""主程序入口 - 支持Token系统和传统系统"""
 import argparse
 import logging
 import os
+import torch
 from sklearn.model_selection import train_test_split
 
 from config.config import *
@@ -11,13 +12,19 @@ from data.data_loader import (
     handle_missing_values,
     apply_alphas_and_return_transformed
 )
-from mcts.node import MCTSNode
-from mcts.search import run_mcts_with_quantile
-from mcts.search import run_mcts_with_risk_seeking
 from alpha.pool import AlphaPool
 from alpha.evaluation import evaluate_formula
 from validation.cross_validation import cross_validate_formulas
 from validation.backtest import backtest_formulas
+
+# 导入新旧系统
+from mcts.node import MCTSNode as NewMCTSNode  # 新的基于状态的节点
+from mcts.search import (
+    LegacyMCTSNode,  # 旧的基于公式的节点
+    run_mcts_with_quantile,
+    run_mcts_with_risk_seeking,
+    run_mcts_with_token_system
+)
 
 # 设置日志
 logging.basicConfig(
@@ -29,13 +36,30 @@ logger = logging.getLogger(__name__)
 
 def main(args):
     """主函数"""
-    logger.info("Starting Mining")
+    logger.info("Starting RiMi Algorithm")
+
+    # 判断使用哪个系统
+    if args.use_token_system:
+        logger.info("=== Using Token-based RPN System ===")
+    else:
+        logger.info("=== Using Legacy String-based System ===")
+
+    # 设置GPU设备
+    if torch.cuda.is_available() and not args.cpu:
+        device = torch.device(f"cuda:{args.gpu_id}")
+        logger.info(f"Using GPU: {torch.cuda.get_device_name(device)}")
+        logger.info(f"GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1024 ** 3:.2f} GB")
+    else:
+        device = torch.device("cpu")
+        logger.info("Using CPU")
+        if not torch.cuda.is_available():
+            logger.warning("CUDA is not available, using CPU instead")
 
     # 第1部分：数据准备和探索
     logger.info("=== Part 1: Data Preparation & Exploration ===")
     X, y, all_features = load_user_dataset(args.data_path, args.target_column)
     check_missing_values(X, 'user_dataset')
-    
+
     # 处理缺失值
     logger.info("Handling missing values in the dataset...")
     X = handle_missing_values(X, strategy='forward_fill', fill_value=0)
@@ -50,35 +74,60 @@ def main(args):
     # 第2-4部分：MCTS和Alpha池管理
     logger.info("=== Parts 2-4: MCTS & Alpha Pool Management ===")
 
-    # 初始化根节点和alpha池
-    root_node = MCTSNode(formula='')
+    # 根据系统选择初始化不同的组件
+    if args.use_token_system:
+        # 使用新的Token系统
+        if args.use_risk_seeking:
+            logger.info("Using Token system with Risk Seeking Policy Network")
+            best_formulas_quantile = run_mcts_with_token_system(
+                X_train, y_train,
+                num_iterations=MCTS_CONFIG['num_iterations'],
+                use_policy_network=True,
+                num_simulations=50,
+                device=device
+            )
+        else:
+            logger.info("Using Token system without Policy Network")
+            best_formulas_quantile = run_mcts_with_token_system(
+                X_train, y_train,
+                num_iterations=MCTS_CONFIG['num_iterations'],
+                use_policy_network=False,
+                num_simulations=50,
+                device=device
+            )
+    else:
+        # 使用旧系统（兼容模式）
+        root_node = LegacyMCTSNode(formula='')
+
+        if args.use_risk_seeking:
+            # 注意：风险寻求模式会自动使用Token系统
+            logger.warning("Risk seeking mode requires Token system, switching automatically...")
+            best_formulas_quantile = run_mcts_with_risk_seeking(
+                root_node,
+                X_train,
+                y_train,
+                all_features,
+                MCTS_CONFIG['num_iterations'],
+                evaluate_formula,
+                MCTS_CONFIG['quantile_threshold'],
+                device=device
+            )
+        else:
+            best_formulas_quantile = run_mcts_with_quantile(
+                root_node,
+                X_train,
+                y_train,
+                all_features,
+                MCTS_CONFIG['num_iterations'],
+                evaluate_formula,
+                MCTS_CONFIG['quantile_threshold']
+            )
+
+    # 初始化Alpha池
     alpha_pool = AlphaPool(
         pool_size=ALPHA_POOL_CONFIG['pool_size'],
         lambda_param=ALPHA_POOL_CONFIG['lambda_param']
     )
-
-    # 运行带分位数优化的MCTS
-    if args.use_risk_seeking:
-        # 使用风险寻求MCTS（论文版本）
-        best_formulas_quantile = run_mcts_with_risk_seeking(
-            root_node,
-            X_train,
-            y_train,
-            all_features,
-            MCTS_CONFIG['num_iterations'],
-            evaluate_formula,
-            MCTS_CONFIG['quantile_threshold']
-        )
-    else:
-        best_formulas_quantile = run_mcts_with_quantile(
-            root_node,
-            X_train,
-            y_train,
-            all_features,
-            MCTS_CONFIG['num_iterations'],
-            evaluate_formula,
-            MCTS_CONFIG['quantile_threshold']
-        )
 
     # 将最佳公式添加到alpha池
     for formula, score in best_formulas_quantile:
@@ -139,19 +188,22 @@ def main(args):
         logger.info(f"Saving results to {results_path}")
         with open(results_path, 'w', encoding='utf-8') as f:
             f.write("=== Top Alpha Formulas ===\n")
+            f.write(f"System: {'Token-based RPN' if args.use_token_system else 'Legacy String-based'}\n")
+            f.write(f"Risk Seeking: {args.use_risk_seeking}\n\n")
+
             for i, formula in enumerate(top_formulas, 1):
                 f.write(f"{i}. {formula}\n")
 
-            if args.backtest:
+            if args.backtest and 'sorted_results' in locals():
                 f.write("\n=== Backtest Results ===\n")
                 for formula, ic in sorted_results:
                     f.write(f"Formula: {formula}, IC: {ic:.4f}\n")
 
-    logger.info("Mining completed successfully!")
+    logger.info("RiskMiner completed successfully!")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Mining Algorithm")
+    parser = argparse.ArgumentParser(description="RiskMiner Algorithm")
 
     parser.add_argument(
         "--data_path",
@@ -166,9 +218,14 @@ if __name__ == "__main__":
         help="Name of the target column"
     )
     parser.add_argument(
+        "--use_token_system",
+        action="store_true",
+        help="Use the new Token-based RPN system instead of legacy string generation"
+    )
+    parser.add_argument(
         "--use_risk_seeking",
         action="store_true",
-        help="Use risk-seeking MCTS with policy network (paper version)"
+        help="Use risk-seeking MCTS with policy network"
     )
     parser.add_argument(
         "--transform_data",
@@ -206,6 +263,17 @@ if __name__ == "__main__":
         type=str,
         default="alpha_results.txt",
         help="Path to save the alpha results"
+    )
+    parser.add_argument(
+        "--gpu_id",
+        type=int,
+        default=0,
+        help="GPU device ID to use (default: 0)"
+    )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU usage even if GPU is available"
     )
 
     args = parser.parse_args()
